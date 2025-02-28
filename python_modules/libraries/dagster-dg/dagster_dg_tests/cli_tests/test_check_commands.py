@@ -15,14 +15,13 @@ from dagster_components.test.test_cases import (
     ComponentValidationTestCase,
     msg_includes_all_of,
 )
-from dagster_dg.utils import ensure_dagster_dg_tests_import, pushd, set_toml_value
+from dagster_dg.utils import ensure_dagster_dg_tests_import, modify_toml, pushd, set_toml_value
 
 ensure_dagster_dg_tests_import()
 from dagster_dg_tests.utils import (
     ProxyRunner,
     assert_runner_result,
     isolated_example_project_foo_bar,
-    modify_pyproject_toml,
 )
 
 COMPONENT_INTEGRATION_TEST_DIR = (
@@ -80,7 +79,7 @@ def test_check_component_succeeds_non_default_component_package() -> None:
             runner,
         ),
     ):
-        with modify_pyproject_toml() as toml:
+        with modify_toml(Path("pyproject.toml")) as toml:
             set_toml_value(
                 toml, ("tool", "dg", "project", "components_module"), "foo_bar._components"
             )

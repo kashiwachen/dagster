@@ -26,7 +26,7 @@ from dagster_dg_tests.utils import (
     isolated_example_component_library_foo_bar,
     isolated_example_project_foo_bar,
     isolated_example_workspace,
-    modify_pyproject_toml,
+    modify_toml,
     standardize_box_characters,
 )
 
@@ -427,7 +427,7 @@ def test_scaffold_component_succeeds_non_default_component_package() -> None:
     with ProxyRunner.test() as runner, isolated_example_project_foo_bar(runner):
         alt_lib_path = Path("foo_bar/_defs")
         alt_lib_path.mkdir(parents=True)
-        with modify_pyproject_toml() as toml:
+        with modify_toml(Path("pyproject.toml")) as toml:
             set_toml_value(toml, ("tool", "dg", "project", "components_module"), "foo_bar._defs")
         result = runner.invoke(
             "scaffold",
@@ -447,7 +447,7 @@ def test_scaffold_component_succeeds_non_default_component_package() -> None:
 
 def test_scaffold_component_fails_components_package_does_not_exist() -> None:
     with ProxyRunner.test() as runner, isolated_example_project_foo_bar(runner):
-        with modify_pyproject_toml() as toml:
+        with modify_toml(Path("pyproject.toml")) as toml:
             set_toml_value(toml, ("tool", "dg", "project", "components_module"), "foo_bar._defs")
         result = runner.invoke(
             "scaffold",

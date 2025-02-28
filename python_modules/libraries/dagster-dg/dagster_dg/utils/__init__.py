@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from fnmatch import fnmatch
 from importlib.machinery import ModuleSpec
 from pathlib import Path
@@ -273,6 +273,13 @@ def _should_skip_file(path: str, excludes: list[str] = DEFAULT_FILE_EXCLUDE_PATT
     return False
 
 
+@contextlib.contextmanager
+def modify_toml(path: Path) -> Iterator[tomlkit.TOMLDocument]:
+    toml = tomlkit.parse(path.read_text())
+    yield toml
+    path.write_text(tomlkit.dumps(toml))
+
+
 def ensure_dagster_dg_tests_import() -> None:
     from dagster_dg import __file__ as dagster_dg_init_py
 
@@ -465,64 +472,124 @@ def parse_json_option(context: click.Context, param: click.Option, value: str):
 # ##### TOML MANIPULATION
 # ########################
 
+TomlPath: TypeAlias = tuple[Union[str, int], ...]
+
 
 def get_toml_value(
     doc: tomlkit.TOMLDocument,
-    path: Iterable[str],
+    path: TomlPath,
     expected_type: Union[type[T], tuple[type[T], ...]],
 ) -> T:
     """Given a tomlkit-parsed document/table (`doc`),retrieve the nested value at `path` and ensure
     it is of type `expected_type`. Returns the value if so, or raises a KeyError / TypeError if not.
     """
-    current: Any = doc
-    for key in path:
-        # If current is not a table/dict or doesn't have the key, error out
-        if not isinstance(current, dict) or key not in current:
-            raise KeyError(f"Key '{key}' not found in path: {'.'.join(path)}")
-        current = current[key]
-
-    # Finally, ensure the found value is of the expected type
-    if not isinstance(current, expected_type):
+    value = _traverse_toml_path(doc, path)[-1]
+    if not isinstance(value, expected_type):
         expected_types = expected_type if isinstance(expected_type, tuple) else (expected_type,)
         type_str = " or ".join(t.__name__ for t in expected_types)
         raise TypeError(
-            f"Expected '{'.'.join(path)}' to be {type_str}, "
-            f"but got {type(current).__name__} instead."
+            f"Expected '{toml_path_to_str(path)}' to be {type_str}, "
+            f"but got {type(value).__name__} instead."
         )
-    return current
+    return value
 
 
-def has_toml_value(doc: tomlkit.TOMLDocument, path: Sequence[str]) -> bool:
+def has_toml_value(doc: tomlkit.TOMLDocument, path: TomlPath) -> bool:
     """Given a tomlkit-parsed document/table (`doc`), return whether a value is defined at `path`."""
-    leading_path, key = path[:-1], path[-1]
-    current = doc
-    for leading_key in leading_path:
-        if not isinstance(current, dict) or leading_key not in current:
-            return False
-        current = current[leading_key]
-    return isinstance(current, dict) and key in current
+    try:
+        _traverse_toml_path(doc, path)
+    except KeyError:
+        return False
+    return True
 
 
-def delete_toml_value(doc: tomlkit.TOMLDocument, path: Sequence[str]) -> None:
+def delete_toml_value(doc: tomlkit.TOMLDocument, path: TomlPath) -> None:
     """Given a tomlkit-parsed document/table (`doc`), delete the nested value at `path`. Raises
     an error if the leading keys do not already lead to a dictionary.
     """
-    dct = get_toml_value(doc, path[:-1], dict) if len(path) > 1 else doc
-    del dct[path[-1]]
+    toml_parts = _traverse_toml_path(doc, path)
+    container = toml_parts[-2]
+    key_or_index = path[-1]
+    if isinstance(container, dict):
+        del container[path[-1]]
+    elif isinstance(container, list):
+        assert isinstance(key_or_index, int)  # We already know this from _traverse_toml_path
+        container.pop(key_or_index)
+    else:
+        raise Exception("Unreachable.")
 
 
-def set_toml_value(doc: tomlkit.TOMLDocument, path: Iterable[str], value: object) -> None:
+def set_toml_value(doc: tomlkit.TOMLDocument, path: TomlPath, value: object) -> None:
     """Given a tomlkit-parsed document/table (`doc`),set a nested value at `path` to `value`. Raises
     an error if the leading keys do not already lead to a dictionary.
     """
-    path_list = list(path)
-    current: Any = doc
-    for key in path_list[:-1]:
-        if key not in current:
-            current[key] = {}
-        elif not isinstance(current[key], dict):
+    container = _traverse_toml_path(doc, path[:-1], create_nodes=True)[-1]
+    key_or_index = path[-1]
+    if isinstance(container, dict):
+        if not isinstance(key_or_index, str):
+            raise TypeError(f"Expected key to be a string, but got {type(key_or_index).__name__}")
+        container[key_or_index] = value
+    elif isinstance(container, list):
+        if not isinstance(key_or_index, int):
+            raise TypeError(f"Expected key to be an integer, but got {type(key_or_index).__name__}")
+        container[key_or_index] = value
+    else:
+        raise Exception("Unreachable.")
+
+
+def toml_path_to_str(path: TomlPath) -> str:
+    first, rest = path[0], path[1:]
+    if not isinstance(first, str):
+        raise TypeError(f"Expected first element of path to be a string, but got {type(first)}")
+    str_path = first
+    for item in rest:
+        if isinstance(item, int):
+            str_path += f"[{item}]"
+        elif isinstance(item, str):
+            str_path += f".{item}"
+        else:
             raise TypeError(
-                f"Expected '{key}' to be a table, but got {type(current[key]).__name__}."
+                f"Expected path elements to be strings or integers, but got {type(item)}"
             )
-        current = current[key]
-    current[path_list[-1]] = value
+    return str_path
+
+
+def toml_path_from_str(path: str) -> TomlPath:
+    tokens = []
+    for segment in path.split("."):
+        # Split each segment by bracketed chunks, e.g. "key[1]" -> ["key", "[1]"]
+        parts = re.split(r"(\[\d+\])", segment)
+        for p in parts:
+            if not p:  # Skip empty strings
+                continue
+            if p.startswith("[") and p.endswith("]"):
+                tokens.append(int(p[1:-1]))  # Convert "[1]" to integer 1
+            else:
+                tokens.append(p)
+    return tuple(tokens)
+
+
+def _traverse_toml_path(
+    doc: tomlkit.TOMLDocument, path: TomlPath, create_nodes: bool = False
+) -> list[Any]:
+    parts: list[Any] = []
+    current: Any = doc
+    for key in path:
+        if isinstance(key, str):
+            if not isinstance(current, dict):
+                raise KeyError(f"Key '{key}' not found in path: {toml_path_to_str(path)}")
+            elif key not in current:
+                if create_nodes:
+                    current[key] = tomlkit.table()
+                else:
+                    raise KeyError(f"Key '{key}' not found in path: {toml_path_to_str(path)}")
+            current = current[key]
+        elif isinstance(key, int):
+            if not isinstance(current, list) or key >= len(current):
+                raise KeyError(f"Index '{key}' not found in path: {toml_path_to_str(path)}")
+            current = current[key]
+        else:
+            raise TypeError(f"Expected key to be a string or integer, but got {type(key)}")
+        parts.append(current)
+
+    return parts
