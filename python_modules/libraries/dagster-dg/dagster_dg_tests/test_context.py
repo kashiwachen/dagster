@@ -127,6 +127,8 @@ def test_invalid_config_workspace():
             ["tool.dg.cli.use_dg_managed_environment", bool, 1],
             ["tool.dg.cli.use_component_modules", Sequence[str], 1],
             ["tool.dg.cli.require_local_venv", bool, 1],
+            ["tool.dg.workspace.projects", list, 1],
+            ["tool.dg.workspace.projects[0]", dict, 1],
         ]
         for path, expected_type, val in cases:
             with _reset_pyproject_toml():
