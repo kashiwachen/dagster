@@ -31,7 +31,7 @@ We love to see our community members get involved! If you are planning to contri
 4. Clone the Dagster repository to the destination of your choice:
 
    ```bash
-   git clone git@github.com:dagster-io/dagster.git
+   git clone https://github.com/dagster-io/dagster.git
    ```
 
 5. Run `make dev_install` at the root of the repository. This sets up a full Dagster developer environment with all modules and runs tests that do not require heavy external dependencies such as docker. This will take a few minutes. Note that certain sections of the makefile (`sanity_check`, which is part of `rebuild_ui`) require POSIX-compliant shells and will fail on CMD and powershell—if developing on windows, using something like WSL or git-bash is recommended.
